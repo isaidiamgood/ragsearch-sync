@@ -1,32 +1,38 @@
-name: Sync Items DB
+name: Sync Items
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # 30분마다 실행
-  workflow_dispatch:         # 수동 실행 버튼도 추가
+    - cron: '*/30 * * * *'  # 매 30분마다 실행
+  workflow_dispatch:  # 수동 실행도 가능
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  sync:
+    runs-on: ubuntu-latest  # 실행 환경 (Linux)
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      # 1단계: 코드 가져오기 (checkout)
+      - name: Checkout code
+        uses: actions/checkout@v2
 
+      # 2단계: Python 환경 설정
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v2
         with:
-          python-version: "3.11"
+          python-version: '3.x'  # 사용할 Python 버전 설정
 
+      # 3단계: 의존성 설치
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run sync script
-        run: python sync.py
-
-      - name: Commit DB
         run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "github-actions"
-          git add items.db
-          git commit -m "update items.db"
-          git push
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt  # requirements.txt에 정의된 의존성 설치
+
+      # 4단계: `sync.py` 실행 (동기화 작업)
+      - name: Run sync.py
+        run: |
+          python sync.py  # GitHub에서 동기화 스크립트 실행
+
+      # 5단계: 업데이트된 파일 푸시
+      - name: Commit and push updated items.db and last_sync.txt
+        run: |
+          git add items.db last_sync.txt  # 수정된 파일을 staging
+          git commit -m "Update items.db and sync time"  # 커밋
+          git push  # 푸시
