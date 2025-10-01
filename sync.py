@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import os
+from datetime import datetime, timedelta
 
 DB_FILE = "items.db"
 LAST_SYNC_FILE = "last_sync.txt"
@@ -72,6 +73,7 @@ def fetch_list(page):
                 map_id = parts[1].strip()
                 ssi = parts[2].strip().strip("'")
 
+        # 아이콘
         img_tag = row.select_one("td.item img")
         img_url = img_tag.get("src") if img_tag else None
 
@@ -95,16 +97,10 @@ def fetch_options(map_id, ssi, page):
     return options
 
 def update_last_sync_time():
-    """Update the last sync time in a text file."""
-    with open(LAST_SYNC_FILE, 'w') as file:
-        file.write(time.strftime("%Y-%m-%d %H:%M:%S"))
-
-def get_last_sync_time():
-    """Get the last sync time from the text file."""
-    if os.path.exists(LAST_SYNC_FILE):
-        with open(LAST_SYNC_FILE, 'r') as file:
-            return file.read().strip()
-    return "없음"
+    """한국 시간(KST) 기준으로 마지막 동기화 시간 기록"""
+    kst = datetime.utcnow() + timedelta(hours=9)
+    with open(LAST_SYNC_FILE, 'w', encoding="utf-8") as file:
+        file.write(kst.strftime("%Y-%m-%d %H:%M:%S"))
 
 def main():
     create_tables()
