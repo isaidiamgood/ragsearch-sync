@@ -3,7 +3,10 @@ name: Sync Items DB
 on:
   schedule:
     - cron: "*/30 * * * *"   # 30분마다 실행
-  workflow_dispatch:         # 수동 실행 버튼도 추가
+  workflow_dispatch:         # 수동 실행 버튼
+
+permissions:
+  contents: write   # <-- 저장소에 push 할 수 있도록 권한 부여
 
 jobs:
   build:
@@ -11,6 +14,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}   # 기본 제공 토큰 사용
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -20,16 +25,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Configure git user
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-
       - name: Run sync script
         run: python sync.py
 
       - name: Commit DB
         run: |
-          git add items.db last_sync.txt
-          git commit -m "update items.db"
+          git config --local user.email "actions@github.com"
+          git config --local user.name "github-actions"
+          git add items.db last_sync.txt || echo "No changes"
+          git commit -m "update items.db" || echo "Nothing to commit"
           git push
