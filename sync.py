@@ -3,7 +3,6 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import os
-from datetime import datetime, timedelta
 
 DB_FILE = "items.db"
 LAST_SYNC_FILE = "last_sync.txt"
@@ -81,26 +80,39 @@ def fetch_list(page):
     return items
 
 def fetch_options(map_id, ssi, page):
+    """옵션 텍스트를 모두 긁어옴 (li뿐 아니라 td 내부 모든 태그 포함)"""
     url = f"{VIEW_URL}?svrID=129&mapID={map_id}&ssi={ssi}&curpage={page}"
     r = requests.get(url, headers=HEADERS, timeout=15)
     r.encoding = "utf-8"
     soup = BeautifulSoup(r.text, "html.parser")
 
     options = []
-    slot_opts = soup.select("th:contains('슬롯정보') + td li")
-    rand_opts = soup.select("th:contains('랜덤옵션') + td li")
 
-    for li in list(slot_opts) + list(rand_opts):
-        txt = li.get_text(" ", strip=True)
-        if txt:
-            options.append(txt)
+    # 슬롯 정보
+    slot_td = soup.select_one("th:contains('슬롯정보') + td")
+    if slot_td:
+        for txt in slot_td.stripped_strings:
+            if txt and txt != "-":
+                options.append(txt.strip())
+
+    # 랜덤 옵션
+    rand_td = soup.select_one("th:contains('랜덤옵션') + td")
+    if rand_td:
+        for txt in rand_td.stripped_strings:
+            if txt and txt != "-":
+                options.append(txt.strip())
+
     return options
 
 def update_last_sync_time():
-    """한국 시간(KST) 기준으로 마지막 동기화 시간 기록"""
-    kst = datetime.utcnow() + timedelta(hours=9)
     with open(LAST_SYNC_FILE, 'w', encoding="utf-8") as file:
-        file.write(kst.strftime("%Y-%m-%d %H:%M:%S"))
+        file.write(time.strftime("%Y-%m-%d %H:%M:%S"))
+
+def get_last_sync_time():
+    if os.path.exists(LAST_SYNC_FILE):
+        with open(LAST_SYNC_FILE, 'r', encoding="utf-8") as file:
+            return file.read().strip()
+    return "없음"
 
 def main():
     create_tables()
