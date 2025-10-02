@@ -77,8 +77,8 @@ def fetch_options(map_id, ssi, page):
 
 def fetch_page(cur, page):
     params = {
-        "svrID": "129",                # 바포메트 서버 고정
-        "itemFullName": "의상",        # 검색어
+        "svrID": "129",          # 바포메트 서버 고정
+        "itemFullName": "의상",  # 검색어 고정
         "itemOrder": "",
         "inclusion": "",
         "curpage": page,
@@ -130,32 +130,31 @@ def main():
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
 
-    # 총 건수 & 마지막 페이지 계산
-    first_page = requests.get(LIST_URL, params={
+    # 1페이지에서 총 검색결과 파싱
+    r = requests.get(LIST_URL, params={
         "svrID": "129",
         "itemFullName": "의상",
         "itemOrder": "",
         "inclusion": "",
-        "curpage": 1
+        "curpage": 1,
     }, headers=HEADERS, timeout=15)
-    first_page.encoding = "utf-8"
-    soup = BeautifulSoup(first_page.text, "html.parser")
+    r.encoding = "utf-8"
+    soup = BeautifulSoup(r.text, "html.parser")
 
     total_items, total_pages = 0, 1
-    try:
-        result_div = soup.find(string=lambda x: x and "검색결과" in x)
-        if result_div:
-            m = re.search(r"([\d,]+)건", result_div)
-            if m:
-                total_items = int(m.group(1).replace(",", ""))
-                total_pages = (total_items // 10) + (1 if total_items % 10 else 0)
-    except Exception as e:
-        print(f"[warn] total_items parse 실패: {e}")
-
+    result_div = soup.find("div", class_="searchResult")
+    if result_div:
+        m = re.search(r"([\d,]+)건", result_div.get_text())
+        if m:
+            total_items = int(m.group(1).replace(",", ""))
+            total_pages = (total_items // 10) + (1 if total_items % 10 else 0)
     print(f"[info] total_items={total_items}, total_pages={total_pages}")
 
-    # 전체 페이지 크롤링
-    for page in range(1, total_pages + 1):
+    # 첫 페이지 수집
+    fetch_page(cur, 1)
+
+    # 2페이지 이후 순회
+    for page in range(2, total_pages + 1):
         ok = fetch_page(cur, page)
         if not ok:
             break
