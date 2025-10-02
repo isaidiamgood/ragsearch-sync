@@ -1,4 +1,4 @@
-import sqlite3, os, time, math, requests
+import sqlite3, os, time, requests, math
 from bs4 import BeautifulSoup
 
 LIST_URL = "https://ro.gnjoy.com/itemdeal/itemDealList.asp"
@@ -10,6 +10,7 @@ LAST_SYNC_FILE = "last_sync.txt"
 
 
 def init_db():
+    # 항상 새로 생성
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
     conn = sqlite3.connect(DB_FILE)
@@ -69,13 +70,16 @@ def fetch_options(map_id, ssi, page):
                 if txt and txt != "없음":
                     options.append(txt)
 
-    return list(dict.fromkeys(options))  # 중복 제거
+    # 중복 제거
+    options = list(dict.fromkeys(options))
+    return options
 
 
 def get_total_pages():
+    """첫 페이지에서 전체 검색 건수 확인 -> 마지막 페이지 계산"""
     params = {
-        "svrID": "129",
-        "itemFullName": "의상",
+        "svrID": "129",          # 바포메트 서버
+        "itemFullName": "의상",  # 검색어
         "itemOrder": "",
         "inclusion": "",
         "curpage": 1,
@@ -84,17 +88,18 @@ def get_total_pages():
     r.encoding = "utf-8"
     soup = BeautifulSoup(r.text, "html.parser")
 
-    total_text = soup.get_text()
     total_items = 0
-    for line in total_text.splitlines():
-        if "검색결과" in line and "건" in line:
-            try:
-                total_items = int(line.split("검색결과 :")[1].split("건")[0].strip().replace(",", ""))
-            except:
-                pass
-            break
+    total_span = soup.find(string=lambda x: x and "검색결과" in x)
+    if total_span:
+        try:
+            total_items = int(total_span.split("검색결과 :")[1].split("건")[0].strip().replace(",", ""))
+        except Exception as e:
+            print(f"[warn] total_items parse 실패: {e}")
 
     total_pages = math.ceil(total_items / 10) if total_items else 1
+    if total_pages > 2000:   # 안전 제한
+        total_pages = 2000
+
     print(f"[info] total_items={total_items}, total_pages={total_pages}")
     return total_pages
 
@@ -155,7 +160,6 @@ def main():
     cur = conn.cursor()
 
     total_pages = get_total_pages()
-
     for page in range(1, total_pages + 1):
         ok = fetch_page(cur, page)
         if not ok:
