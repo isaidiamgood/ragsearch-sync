@@ -10,7 +10,7 @@ LAST_SYNC_FILE = "last_sync.txt"
 
 
 def init_db():
-    # 기존 DB 제거 후 새로 생성
+    # 기존 DB 삭제 후 새로 생성
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
     conn = sqlite3.connect(DB_FILE)
@@ -37,6 +37,7 @@ def update_last_sync_time():
 
 
 def fetch_options(map_id, ssi, page):
+    """상세 페이지에서 슬롯/옵션 추출"""
     url = f"{VIEW_URL}?svrID=129&mapID={map_id}&ssi={ssi}&curpage={page}"
     r = requests.get(url, headers=HEADERS, timeout=15)
     r.encoding = "utf-8"
@@ -75,10 +76,36 @@ def fetch_options(map_id, ssi, page):
     return options
 
 
-def fetch_page(cur, page):
+def get_total_pages():
+    """첫 페이지에서 전체 건수 파싱 후 마지막 페이지 계산"""
     params = {
-        "svrID": "129",  # 바포메트 서버 고정
-        "itemFullName": "의상",  # 검색 키워드
+        "svrID": "129",            # 바포메트 서버 고정
+        "itemFullName": "의상",     # 검색 키워드
+        "itemOrder": "",
+        "inclusion": "",
+        "curpage": 1,
+    }
+    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
+    r.encoding = "utf-8"
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    result_text = soup.get_text(" ", strip=True)
+    m = re.search(r"검색결과\s*:\s*([\d,]+)건", result_text)
+    if m:
+        total_items = int(m.group(1).replace(",", ""))
+        total_pages = (total_items // 10) + (1 if total_items % 10 else 0)
+        print(f"[info] total_items={total_items}, total_pages={total_pages}")
+        return total_pages
+    else:
+        print("[warn] total_items parse 실패, 기본 1페이지 처리")
+        return 1
+
+
+def fetch_page(cur, page):
+    """리스트 페이지 긁기"""
+    params = {
+        "svrID": "129",
+        "itemFullName": "의상",
         "itemOrder": "",
         "inclusion": "",
         "curpage": page,
@@ -130,30 +157,10 @@ def main():
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
 
-    # --- 총 페이지 수 구하기 ---
-    params = {"svrID": "129", "itemFullName": "의상", "itemOrder": "", "inclusion": "", "curpage": 1}
-    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
-    r.encoding = "utf-8"
-    soup = BeautifulSoup(r.text, "html.parser")
+    total_pages = get_total_pages()
 
-    total_items, total_pages = 0, 1
-    result_p = soup.find("p", class_="searchNum")
-    if result_p:
-        m = re.search(r"([\d,]+)건", result_p.get_text())
-        if m:
-            total_items = int(m.group(1).replace(",", ""))
-            total_pages = (total_items // 10) + (1 if total_items % 10 else 0)
-            print(f"[info] total_items={total_items}, total_pages={total_pages}")
-    else:
-        print("[warn] total_items parse 실패")
-
-    # --- 전체 페이지 크롤링 ---
-    page = 1
-    while page <= total_pages:
-        ok = fetch_page(cur, page)
-        if not ok:
-            break
-        page += 1
+    for page in range(1, total_pages + 1):
+        fetch_page(cur, page)
 
     conn.commit()
     conn.close()
