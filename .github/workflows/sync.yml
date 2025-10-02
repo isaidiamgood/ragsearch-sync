@@ -11,8 +11,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0   # 🔥 전체 히스토리를 가져옴 (푸시 충돌 방지)
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -29,10 +27,6 @@ jobs:
         run: |
           git config --local user.email "actions@github.com"
           git config --local user.name "github-actions"
-          git add items.db last_sync.txt || true
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "update items.db"
-            git push
-          fi
+          git add items.db last_sync.txt
+          git commit -m "auto update items.db" || echo "No changes to commit"
+          git push
