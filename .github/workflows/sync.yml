@@ -23,10 +23,14 @@ jobs:
       - name: Run sync script
         run: python sync.py
 
-      - name: Commit DB & Sync Log
+      - name: Commit DB
         run: |
           git config --local user.email "actions@github.com"
           git config --local user.name "github-actions"
-          git add items.db last_sync.txt   # ✅ 동기화 시간 파일도 함께 업로드
-          git commit -m "update items.db & last_sync.txt" || echo "No changes to commit"
-          git push
+          git add items.db last_sync.txt || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "update items.db"
+            git push
+          fi
