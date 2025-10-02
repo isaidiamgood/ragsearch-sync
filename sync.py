@@ -1,4 +1,4 @@
-import sqlite3, os, time, requests, math
+import sqlite3, os, time, math, re, requests
 from bs4 import BeautifulSoup
 
 LIST_URL = "https://ro.gnjoy.com/itemdeal/itemDealList.asp"
@@ -10,7 +10,7 @@ LAST_SYNC_FILE = "last_sync.txt"
 
 
 def init_db():
-    # 항상 새로 생성
+    """매번 새 DB로 초기화"""
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
     conn = sqlite3.connect(DB_FILE)
@@ -32,11 +32,42 @@ def init_db():
 
 
 def update_last_sync_time():
+    """마지막 동기화 시간 기록"""
     with open(LAST_SYNC_FILE, "w", encoding="utf-8") as f:
         f.write(time.strftime("%Y-%m-%d %H:%M:%S"))
 
 
+def get_total_pages():
+    """첫 페이지에서 전체 검색 건수 확인 -> 마지막 페이지 계산"""
+    params = {
+        "svrID": "129",          # 바포메트 서버 고정
+        "itemFullName": "의상",  # 검색어
+        "itemOrder": "",
+        "inclusion": "",
+        "curpage": 1,
+    }
+    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
+    r.encoding = "utf-8"
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    total_items = 0
+    result_tag = soup.find("td", class_="searchResult")   # 검색결과 들어있는 td
+    if result_tag:
+        text = result_tag.get_text(strip=True)
+        match = re.search(r"검색결과\s*:\s*([\d,]+)건", text)
+        if match:
+            total_items = int(match.group(1).replace(",", ""))
+
+    total_pages = math.ceil(total_items / 10) if total_items else 1
+    if total_pages > 2000:   # 안전 제한
+        total_pages = 2000
+
+    print(f"[info] total_items={total_items}, total_pages={total_pages}")
+    return total_pages
+
+
 def fetch_options(map_id, ssi, page):
+    """아이템 상세 페이지에서 슬롯/옵션 수집"""
     url = f"{VIEW_URL}?svrID=129&mapID={map_id}&ssi={ssi}&curpage={page}"
     r = requests.get(url, headers=HEADERS, timeout=15)
     r.encoding = "utf-8"
@@ -75,39 +106,11 @@ def fetch_options(map_id, ssi, page):
     return options
 
 
-def get_total_pages():
-    """첫 페이지에서 전체 검색 건수 확인 -> 마지막 페이지 계산"""
+def fetch_page(cur, page):
+    """리스트 페이지 크롤링"""
     params = {
         "svrID": "129",          # 바포메트 서버
         "itemFullName": "의상",  # 검색어
-        "itemOrder": "",
-        "inclusion": "",
-        "curpage": 1,
-    }
-    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
-    r.encoding = "utf-8"
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    total_items = 0
-    total_span = soup.find(string=lambda x: x and "검색결과" in x)
-    if total_span:
-        try:
-            total_items = int(total_span.split("검색결과 :")[1].split("건")[0].strip().replace(",", ""))
-        except Exception as e:
-            print(f"[warn] total_items parse 실패: {e}")
-
-    total_pages = math.ceil(total_items / 10) if total_items else 1
-    if total_pages > 2000:   # 안전 제한
-        total_pages = 2000
-
-    print(f"[info] total_items={total_items}, total_pages={total_pages}")
-    return total_pages
-
-
-def fetch_page(cur, page):
-    params = {
-        "svrID": "129",
-        "itemFullName": "의상",
         "itemOrder": "",
         "inclusion": "",
         "curpage": page,
