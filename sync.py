@@ -6,9 +6,10 @@ import time
 
 BASE_URL = "https://ro.gnjoy.com/itemdeal/itemDealList.asp"
 
-# DB 준비
+# DB 준비 (기존 테이블 지우고 새로 생성)
 conn = sqlite3.connect("items.db")
 c = conn.cursor()
+c.execute("DROP TABLE IF EXISTS items")
 c.execute("""
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,11 +32,11 @@ def fetch_detail(detail_url):
     res.encoding = "utf-8"
     soup = BeautifulSoup(res.text, "html.parser")
 
-    # 슬롯 정보 전체 추출
+    # 슬롯 정보
     slot_info_list = soup.select("th:contains('슬롯정보') + td.listCell ul li")
     slot_text = ", ".join(li.get_text(strip=True) for li in slot_info_list) if slot_info_list else ""
 
-    # 랜덤 옵션 전체 추출
+    # 랜덤 옵션
     random_options_list = soup.select("th:contains('랜덤옵션') + td.listCell ul li")
     random_options = ", ".join(li.get_text(strip=True) for li in random_options_list) if random_options_list else ""
 
@@ -44,7 +45,7 @@ def fetch_detail(detail_url):
 
 def scrape_items():
     total_inserted = 0
-    for page in range(1, 200):  # 페이지 범위 넉넉히
+    for page in range(1, 200):  # 페이지 넉넉히
         soup = fetch_page(page)
         rows = soup.select("table.dealList tbody tr")
         if not rows:
@@ -63,13 +64,12 @@ def scrape_items():
             detail_link = cols[1].select_one("a")
             if detail_link and "onclick" in detail_link.attrs:
                 onclick = detail_link["onclick"]
-                # CallItemDealView(129,2023,'7556575854403382958',120)
                 try:
                     params = onclick.split("(")[1].split(")")[0].split(",")
                     svrID, mapID, ssi, curpage = [p.strip().strip("'") for p in params]
                     detail_url = f"https://ro.gnjoy.com/itemdeal/itemDealView.asp?svrID={svrID}&mapID={mapID}&ssi={ssi}&curpage={curpage}"
                     options = fetch_detail(detail_url)
-                except Exception as e:
+                except Exception:
                     options = ""
             else:
                 options = ""
@@ -79,13 +79,12 @@ def scrape_items():
             total_inserted += 1
 
         print(f"[page={page}] inserted {len(rows)} items")
-        time.sleep(1.5)  # 서버 부하 방지
+        time.sleep(1.5)
 
     conn.commit()
     print(f"[done] total items inserted: {total_inserted}")
 
 if __name__ == "__main__":
     scrape_items()
-    # 마지막 동기화 기록 파일
     with open("last_sync.txt", "w", encoding="utf-8") as f:
         f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
