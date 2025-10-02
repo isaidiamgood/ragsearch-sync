@@ -1,54 +1,49 @@
 import requests
-from bs4 import BeautifulSoup
 import sqlite3
-from datetime import datetime
 import time
+from bs4 import BeautifulSoup
 
-BASE_URL = "https://ro.gnjoy.com/itemdeal/itemDealList.asp"
+DB_FILE = "items.db"
+LAST_SYNC_FILE = "last_sync.txt"
 
-# DB 준비 (기존 테이블 지우고 새로 생성)
-conn = sqlite3.connect("items.db")
-c = conn.cursor()
-c.execute("DROP TABLE IF EXISTS items")
-c.execute("""
-CREATE TABLE IF NOT EXISTS items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    price TEXT,
-    shop TEXT,
-    options TEXT,
-    last_update TEXT
-)
-""")
+BASE_URL = "https://ro.gnjoy.com/itemdeal/dealSearch.asp"
 
-def fetch_page(page=1, keyword="의상"):
-    url = f"{BASE_URL}?svrID=129&itemFullName={keyword}&inclusion=&sortType=DESC&curpage={page}"
-    res = requests.get(url)
+def fetch_page(page):
+    """해당 페이지 HTML 가져오기"""
+    url = f"{BASE_URL}?itemFullName=의상&page={page}"
+    res = requests.get(url, timeout=10)
     res.encoding = "utf-8"
     return BeautifulSoup(res.text, "html.parser")
 
-def fetch_detail(detail_url):
-    res = requests.get(detail_url)
-    res.encoding = "utf-8"
-    soup = BeautifulSoup(res.text, "html.parser")
-
-    # 슬롯 정보
-    slot_info_list = soup.select("th:contains('슬롯정보') + td.listCell ul li")
-    slot_text = ", ".join(li.get_text(strip=True) for li in slot_info_list) if slot_info_list else ""
-
-    # 랜덤 옵션
-    random_options_list = soup.select("th:contains('랜덤옵션') + td.listCell ul li")
-    random_options = ", ".join(li.get_text(strip=True) for li in random_options_list) if random_options_list else ""
-
-    options = ", ".join(filter(None, [slot_text, random_options]))
-    return options
 
 def scrape_items():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    # items 테이블 생성
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        price TEXT,
+        shop TEXT,
+        options TEXT,
+        last_update TEXT
+    )
+    """)
+
+    # 매번 실행 시 기존 데이터 삭제 후 다시 넣기
+    c.execute("DELETE FROM items")
+
     total_inserted = 0
-    for page in range(1, 200):  # 페이지 넉넉히
+
+    for page in range(1, 300):  # 넉넉히 300페이지까지
         soup = fetch_page(page)
         rows = soup.select("table.dealList tbody tr")
-        if not rows:
+
+        # --- 탈출 조건 ---
+        if not rows or "검색결과 없음" in soup.text:
+            print(f"[page={page}] no more items → 종료")
             break
 
         for row in rows:
@@ -60,31 +55,48 @@ def scrape_items():
             price = cols[3].get_text(strip=True)
             shop = cols[4].get_text(strip=True)
 
-            # detail 링크 추출
-            detail_link = cols[1].select_one("a")
-            if detail_link and "onclick" in detail_link.attrs:
-                onclick = detail_link["onclick"]
+            # 아이템 상세 페이지 들어가서 옵션 정보 가져오기
+            link_tag = cols[1].find("a")
+            options = ""
+            if link_tag and "CallItemDealView" in link_tag.get("onclick", ""):
                 try:
-                    params = onclick.split("(")[1].split(")")[0].split(",")
-                    svrID, mapID, ssi, curpage = [p.strip().strip("'") for p in params]
-                    detail_url = f"https://ro.gnjoy.com/itemdeal/itemDealView.asp?svrID={svrID}&mapID={mapID}&ssi={ssi}&curpage={curpage}"
-                    options = fetch_detail(detail_url)
-                except Exception:
-                    options = ""
-            else:
-                options = ""
+                    # 파라미터 추출
+                    onclick = link_tag["onclick"]
+                    parts = onclick.split(",")
+                    svrID, mapID, ssi = parts[0].split("(")[1], parts[1], parts[2]
+                    detail_url = f"https://ro.gnjoy.com/itemdeal/itemDealView.asp?svrID={svrID.strip()}&mapID={mapID.strip()}&ssi={ssi.strip()}&curpage={page}"
 
-            c.execute("INSERT INTO items (name, price, shop, options, last_update) VALUES (?,?,?,?,?)",
-                      (name, price, shop, options, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-            total_inserted += 1
+                    detail_res = requests.get(detail_url, timeout=10)
+                    detail_res.encoding = "utf-8"
+                    detail_soup = BeautifulSoup(detail_res.text, "html.parser")
 
+                    slot_info = detail_soup.select("th:contains('슬롯정보') + td ul li")
+                    opts = [li.get_text(" ", strip=True) for li in slot_info]
+                    options = " | ".join(opts) if opts else ""
+                except Exception as e:
+                    print(f"옵션 파싱 오류: {e}")
+
+            # None 또는 빈 값이면 "없음" 대신 "" 저장 (안 보이게 처리)
+            options = options if options else ""
+
+            c.execute(
+                "INSERT INTO items (name, price, shop, options, last_update) VALUES (?,?,?,?,datetime('now','localtime'))",
+                (name, price, shop, options)
+            )
+
+        conn.commit()
+        total_inserted += len(rows)
         print(f"[page={page}] inserted {len(rows)} items")
-        time.sleep(1.5)
 
-    conn.commit()
+        time.sleep(1.5)  # 서버 과부하 방지
+
+    conn.close()
     print(f"[done] total items inserted: {total_inserted}")
+
+    # 동기화 시간 기록
+    with open(LAST_SYNC_FILE, "w", encoding="utf-8") as f:
+        f.write(time.strftime("%Y-%m-%d %H:%M:%S"))
+
 
 if __name__ == "__main__":
     scrape_items()
-    with open("last_sync.txt", "w", encoding="utf-8") as f:
-        f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
