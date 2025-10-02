@@ -10,7 +10,7 @@ LAST_SYNC_FILE = "last_sync.txt"
 
 
 def init_db():
-    # 매번 새 DB로 초기화
+    # 기존 DB 제거 후 새로 생성
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
     conn = sqlite3.connect(DB_FILE)
@@ -77,8 +77,8 @@ def fetch_options(map_id, ssi, page):
 
 def fetch_page(cur, page):
     params = {
-        "svrID": "129",          # 바포메트 서버 고정
-        "itemFullName": "의상",  # 검색어 고정
+        "svrID": "129",  # 바포메트 서버 고정
+        "itemFullName": "의상",  # 검색 키워드
         "itemOrder": "",
         "inclusion": "",
         "curpage": page,
@@ -130,34 +130,30 @@ def main():
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
 
-    # 1페이지에서 총 검색결과 파싱
-    r = requests.get(LIST_URL, params={
-        "svrID": "129",
-        "itemFullName": "의상",
-        "itemOrder": "",
-        "inclusion": "",
-        "curpage": 1,
-    }, headers=HEADERS, timeout=15)
+    # --- 총 페이지 수 구하기 ---
+    params = {"svrID": "129", "itemFullName": "의상", "itemOrder": "", "inclusion": "", "curpage": 1}
+    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
     r.encoding = "utf-8"
     soup = BeautifulSoup(r.text, "html.parser")
 
     total_items, total_pages = 0, 1
-    result_div = soup.find("div", class_="searchResult")
-    if result_div:
-        m = re.search(r"([\d,]+)건", result_div.get_text())
+    result_p = soup.find("p", class_="searchNum")
+    if result_p:
+        m = re.search(r"([\d,]+)건", result_p.get_text())
         if m:
             total_items = int(m.group(1).replace(",", ""))
             total_pages = (total_items // 10) + (1 if total_items % 10 else 0)
-    print(f"[info] total_items={total_items}, total_pages={total_pages}")
+            print(f"[info] total_items={total_items}, total_pages={total_pages}")
+    else:
+        print("[warn] total_items parse 실패")
 
-    # 첫 페이지 수집
-    fetch_page(cur, 1)
-
-    # 2페이지 이후 순회
-    for page in range(2, total_pages + 1):
+    # --- 전체 페이지 크롤링 ---
+    page = 1
+    while page <= total_pages:
         ok = fetch_page(cur, page)
         if not ok:
             break
+        page += 1
 
     conn.commit()
     conn.close()
