@@ -1,4 +1,4 @@
-import sqlite3, os, time, requests
+import sqlite3, os, time, math, requests
 from bs4 import BeautifulSoup
 
 LIST_URL = "https://ro.gnjoy.com/itemdeal/itemDealList.asp"
@@ -10,7 +10,6 @@ LAST_SYNC_FILE = "last_sync.txt"
 
 
 def init_db():
-    # 매번 새 DB로 초기화
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
     conn = sqlite3.connect(DB_FILE)
@@ -70,14 +69,39 @@ def fetch_options(map_id, ssi, page):
                 if txt and txt != "없음":
                     options.append(txt)
 
-    # 중복 제거
-    options = list(dict.fromkeys(options))
-    return options
+    return list(dict.fromkeys(options))  # 중복 제거
+
+
+def get_total_pages():
+    params = {
+        "svrID": "129",
+        "itemFullName": "의상",
+        "itemOrder": "",
+        "inclusion": "",
+        "curpage": 1,
+    }
+    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
+    r.encoding = "utf-8"
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    total_text = soup.get_text()
+    total_items = 0
+    for line in total_text.splitlines():
+        if "검색결과" in line and "건" in line:
+            try:
+                total_items = int(line.split("검색결과 :")[1].split("건")[0].strip().replace(",", ""))
+            except:
+                pass
+            break
+
+    total_pages = math.ceil(total_items / 10) if total_items else 1
+    print(f"[info] total_items={total_items}, total_pages={total_pages}")
+    return total_pages
 
 
 def fetch_page(cur, page):
     params = {
-        "svrID": "",
+        "svrID": "129",
         "itemFullName": "의상",
         "itemOrder": "",
         "inclusion": "",
@@ -130,12 +154,12 @@ def main():
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
 
-    page = 1
-    while True:
+    total_pages = get_total_pages()
+
+    for page in range(1, total_pages + 1):
         ok = fetch_page(cur, page)
         if not ok:
             break
-        page += 1
 
     conn.commit()
     conn.close()
