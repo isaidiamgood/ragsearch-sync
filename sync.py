@@ -1,36 +1,39 @@
-import requests
-import sqlite3
-import os
+import sqlite3, os, time, requests
 from bs4 import BeautifulSoup
-from datetime import datetime
 
-BASE_URL = "https://ro.gnjoy.com/itemdeal/itemDealList.asp"
+LIST_URL = "https://ro.gnjoy.com/itemdeal/itemDealList.asp"
 VIEW_URL = "https://ro.gnjoy.com/itemdeal/itemDealView.asp"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 DB_FILE = "items.db"
-SYNC_FILE = "last_sync.txt"
+LAST_SYNC_FILE = "last_sync.txt"
 
 
 def init_db():
+    # 매번 새 DB로 초기화
+    if os.path.exists(DB_FILE):
+        os.remove(DB_FILE)
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            server TEXT,
-            quantity TEXT,
-            price TEXT,
-            shop TEXT,
-            options TEXT,
-            last_updated TEXT
-        )
+    CREATE TABLE items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        server TEXT,
+        quantity TEXT,
+        price TEXT,
+        shop TEXT,
+        options TEXT,
+        last_updated TEXT
+    )
     """)
     conn.commit()
-    return conn
+    conn.close()
+
+
+def update_last_sync_time():
+    with open(LAST_SYNC_FILE, "w", encoding="utf-8") as f:
+        f.write(time.strftime("%Y-%m-%d %H:%M:%S"))
 
 
 def fetch_options(map_id, ssi, page):
@@ -73,8 +76,14 @@ def fetch_options(map_id, ssi, page):
 
 
 def fetch_page(cur, page):
-    url = f"{BASE_URL}?svrID=&itemFullName=의상&itemOrder=&inclusion=&curpage={page}"
-    r = requests.get(url, headers=HEADERS, timeout=15)
+    params = {
+        "svrID": "",
+        "itemFullName": "의상",
+        "itemOrder": "",
+        "inclusion": "",
+        "curpage": page,
+    }
+    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
     r.encoding = "utf-8"
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -89,52 +98,49 @@ def fetch_page(cur, page):
             continue
 
         server = cols[0].get_text(strip=True)
-        name = cols[1].get_text(strip=True)
+        item_tag = cols[1].find("a")
+        name = item_tag.get_text(strip=True) if item_tag else "?"
         quantity = cols[2].get_text(strip=True)
         price = cols[3].get_text(strip=True)
         shop = cols[4].get_text(strip=True)
 
-        # detail 링크 파라미터 추출
-        link = cols[1].find("a")
-        options = []
-        if link and "CallItemDealView" in link.get("onclick", ""):
-            try:
-                args = link["onclick"].split("(")[1].split(")")[0].split(",")
-                map_id = args[1].strip()
-                ssi = args[2].strip().strip("'")
-                options = fetch_options(map_id, ssi, page)
-            except Exception as e:
-                print("option fetch error:", e)
+        options = ""
+        if item_tag:
+            onclick = item_tag.get("onclick", "")
+            if "CallItemDealView" in onclick:
+                try:
+                    parts = onclick.split("(")[1].split(")")[0].split(",")
+                    map_id, ssi = parts[1].strip(), parts[2].strip().strip("'")
+                    opt_list = fetch_options(map_id, ssi, page)
+                    options = " | ".join(opt_list)
+                except Exception as e:
+                    print(f"[warn] 옵션 파싱 실패: {e}")
 
         cur.execute("""
             INSERT INTO items (name, server, quantity, price, shop, options, last_updated)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (name, server, quantity, price, shop, "\n".join(options), datetime.now().isoformat()))
+        """, (name, server, quantity, price, shop, options, time.strftime("%Y-%m-%d %H:%M:%S")))
 
+    print(f"[page={page}] {len(rows)} items processed")
     return True
 
 
 def main():
-    conn = init_db()
+    init_db()
+    conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
 
     page = 1
-    total = 0
     while True:
         ok = fetch_page(cur, page)
         if not ok:
             break
-        conn.commit()
-        total += 1
         page += 1
 
+    conn.commit()
     conn.close()
-
-    # 마지막 동기화 시간 기록
-    with open(SYNC_FILE, "w", encoding="utf-8") as f:
-        f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
-    print(f"[done] total pages parsed: {total}")
+    update_last_sync_time()
+    print("[done] items.db 새로 생성 완료")
 
 
 if __name__ == "__main__":
