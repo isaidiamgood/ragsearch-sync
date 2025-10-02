@@ -142,9 +142,7 @@ def main():
         if not ok:
             break
         page += 1
-        if page > 5:   # 로컬 테스트 시 과부하 방지 (원하면 제거 가능)
-            break
-
+        
     conn.commit()
     conn.close()
     update_last_sync_time()
@@ -153,3 +151,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
