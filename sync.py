@@ -1,145 +1,91 @@
-import sqlite3
 import requests
 from bs4 import BeautifulSoup
+import sqlite3
+from datetime import datetime
 import time
-import os
-
-DB_FILE = "items.db"
-LAST_SYNC_FILE = "last_sync.txt"
 
 BASE_URL = "https://ro.gnjoy.com/itemdeal/itemDealList.asp"
-VIEW_URL = "https://ro.gnjoy.com/itemdeal/itemDealView.asp"
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/117.0 Safari/537.36"
-}
+# DB 준비
+conn = sqlite3.connect("items.db")
+c = conn.cursor()
+c.execute("""
+CREATE TABLE IF NOT EXISTS items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    price TEXT,
+    shop TEXT,
+    options TEXT,
+    last_update TEXT
+)
+""")
 
-def create_tables():
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            price TEXT,
-            shop_name TEXT,
-            img_url TEXT,
-            map_id TEXT,
-            ssi TEXT,
-            page_no INTEGER
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS item_options (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            item_id INTEGER,
-            option_text TEXT,
-            FOREIGN KEY(item_id) REFERENCES items(id)
-        )
-    """)
-    conn.commit()
-    conn.close()
+def fetch_page(page=1, keyword="의상"):
+    url = f"{BASE_URL}?svrID=129&itemFullName={keyword}&inclusion=&sortType=DESC&curpage={page}"
+    res = requests.get(url)
+    res.encoding = "utf-8"
+    return BeautifulSoup(res.text, "html.parser")
 
-def fetch_list(page):
-    url = f"{BASE_URL}?svrID=129&itemFullName=의상&curpage={page}"
-    r = requests.get(url, headers=HEADERS, timeout=15)
-    r.encoding = "utf-8"
-    soup = BeautifulSoup(r.text, "html.parser")
+def fetch_detail(detail_url):
+    res = requests.get(detail_url)
+    res.encoding = "utf-8"
+    soup = BeautifulSoup(res.text, "html.parser")
 
-    items = []
-    rows = soup.select("table.dealList tbody tr")
-    for row in rows:
-        name_tag = row.select_one("td.item a span")
-        link_tag = row.select_one("td.item a")
-        price_tag = row.select_one("td.price span")
-        shop_tag = row.select_one("td.shop")
+    # 슬롯 정보 전체 추출
+    slot_info_list = soup.select("th:contains('슬롯정보') + td.listCell ul li")
+    slot_text = ", ".join(li.get_text(strip=True) for li in slot_info_list) if slot_info_list else ""
 
-        if not name_tag or not link_tag:
-            continue
+    # 랜덤 옵션 전체 추출
+    random_options_list = soup.select("th:contains('랜덤옵션') + td.listCell ul li")
+    random_options = ", ".join(li.get_text(strip=True) for li in random_options_list) if random_options_list else ""
 
-        name = name_tag.text.strip()
-        price = price_tag.text.strip() if price_tag else ""
-        shop = shop_tag.text.strip() if shop_tag else ""
-        link = link_tag.get("onclick", "")
-
-        # mapID, ssi 추출
-        map_id, ssi = None, None
-        if "CallItemDealView" in link:
-            parts = link.replace("javascript:CallItemDealView(", "").replace(")", "").split(",")
-            if len(parts) >= 3:
-                map_id = parts[1].strip()
-                ssi = parts[2].strip().strip("'")
-
-        # 아이콘
-        img_tag = row.select_one("td.item img")
-        img_url = img_tag.get("src") if img_tag else None
-
-        items.append((name, price, shop, img_url, map_id, ssi, page))
-    return items
-
-def fetch_options(map_id, ssi, page):
-    url = f"{VIEW_URL}?svrID=129&mapID={map_id}&ssi={ssi}&curpage={page}"
-    r = requests.get(url, headers=HEADERS, timeout=15)
-    r.encoding = "utf-8"
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    options = []
-    slot_opts = soup.select("th:contains('슬롯정보') + td li")
-    rand_opts = soup.select("th:contains('랜덤옵션') + td li")
-
-    for li in list(slot_opts) + list(rand_opts):
-        txt = li.get_text(" ", strip=True)
-        if txt:
-            options.append(txt)
-        else:
-            options.append("없음")  # 빈칸도 없음으로 기록 (DB는 유지)
-
+    options = ", ".join(filter(None, [slot_text, random_options]))
     return options
 
-def update_last_sync_time():
-    """Update the last sync time in a text file."""
-    with open(LAST_SYNC_FILE, 'w', encoding="utf-8") as file:
-        file.write(time.strftime("%Y-%m-%d %H:%M:%S"))
-
-def main():
-    create_tables()
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-
-    total = 0
-    page = 1
-    while True:
-        items = fetch_list(page)
-        if not items:
-            print(f"[page={page}] found 0 items -> 종료")
+def scrape_items():
+    total_inserted = 0
+    for page in range(1, 200):  # 페이지 범위 넉넉히
+        soup = fetch_page(page)
+        rows = soup.select("table.dealList tbody tr")
+        if not rows:
             break
 
-        print(f"[page={page}] found {len(items)} items")
-        for name, price, shop, img_url, map_id, ssi, pageno in items:
-            cur.execute("""
-                INSERT INTO items (name, price, shop_name, img_url, map_id, ssi, page_no)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (name, price, shop, img_url, map_id, ssi, pageno))
-            item_id = cur.lastrowid
+        for row in rows:
+            cols = row.find_all("td")
+            if len(cols) < 5:
+                continue
 
-            if map_id and ssi:
-                opts = fetch_options(map_id, ssi, page)
-                for opt in opts:
-                    cur.execute("INSERT INTO item_options (item_id, option_text) VALUES (?, ?)", (item_id, opt))
-                    print(f"     옵션: {opt}")
+            name = cols[1].get_text(strip=True)
+            price = cols[3].get_text(strip=True)
+            shop = cols[4].get_text(strip=True)
 
-            print(f"  [+] {name} ({price}) | {shop}")
-            total += 1
+            # detail 링크 추출
+            detail_link = cols[1].select_one("a")
+            if detail_link and "onclick" in detail_link.attrs:
+                onclick = detail_link["onclick"]
+                # CallItemDealView(129,2023,'7556575854403382958',120)
+                try:
+                    params = onclick.split("(")[1].split(")")[0].split(",")
+                    svrID, mapID, ssi, curpage = [p.strip().strip("'") for p in params]
+                    detail_url = f"https://ro.gnjoy.com/itemdeal/itemDealView.asp?svrID={svrID}&mapID={mapID}&ssi={ssi}&curpage={curpage}"
+                    options = fetch_detail(detail_url)
+                except Exception as e:
+                    options = ""
+            else:
+                options = ""
 
-        conn.commit()
-        page += 1
-        time.sleep(0.5)
+            c.execute("INSERT INTO items (name, price, shop, options, last_update) VALUES (?,?,?,?,?)",
+                      (name, price, shop, options, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            total_inserted += 1
 
-    conn.close()
-    print(f"[done] total items inserted: {total}")
-    update_last_sync_time()
+        print(f"[page={page}] inserted {len(rows)} items")
+        time.sleep(1.5)  # 서버 부하 방지
+
+    conn.commit()
+    print(f"[done] total items inserted: {total_inserted}")
 
 if __name__ == "__main__":
-    main()
+    scrape_items()
+    # 마지막 동기화 기록 파일
+    with open("last_sync.txt", "w", encoding="utf-8") as f:
+        f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
