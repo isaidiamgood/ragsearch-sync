@@ -1,4 +1,4 @@
-import sqlite3, os, time, requests, re
+import sqlite3, os, time, math, requests
 from bs4 import BeautifulSoup
 
 LIST_URL = "https://ro.gnjoy.com/itemdeal/itemDealList.asp"
@@ -7,9 +7,6 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 DB_FILE = "items.db"
 LAST_SYNC_FILE = "last_sync.txt"
-
-SERVER_ID = "129"         # 바포메트 서버
-SEARCH_KEYWORD = "의상"   # 검색 키워드
 
 
 def init_db():
@@ -38,39 +35,9 @@ def update_last_sync_time():
         f.write(time.strftime("%Y-%m-%d %H:%M:%S"))
 
 
-def fetch_total_pages():
-    """첫 페이지에서 전체 건수 읽어 마지막 페이지 계산"""
-    params = {
-        "svrID": SERVER_ID,
-        "itemFullName": SEARCH_KEYWORD,
-        "itemOrder": "",
-        "inclusion": "",
-        "curpage": 1,
-    }
-    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=20)
-    r.encoding = "utf-8"
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    full_text = soup.get_text(" ", strip=True)
-    m = re.search(r"검색결과\s*:\s*([\d,]+)건", full_text)
-    if not m:
-        print("[error] 검색결과 건수 탐색 실패")
-        return 1
-
-    try:
-        total_items = int(m.group(1).replace(",", ""))
-        total_pages = (total_items // 10) + (1 if total_items % 10 else 0)
-        print(f"[info] total_items={total_items}, total_pages={total_pages}")
-        return total_pages
-    except Exception as e:
-        print(f"[error] total_items parse 실패: {e}, text={m.group(0)}")
-        return 1
-
-
 def fetch_options(map_id, ssi, page):
-    """상세 페이지에서 슬롯/랜덤옵션 추출"""
-    url = f"{VIEW_URL}?svrID={SERVER_ID}&mapID={map_id}&ssi={ssi}&curpage={page}"
-    r = requests.get(url, headers=HEADERS, timeout=20)
+    url = f"{VIEW_URL}?svrID=129&mapID={map_id}&ssi={ssi}&curpage={page}"
+    r = requests.get(url, headers=HEADERS, timeout=15)
     r.encoding = "utf-8"
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -102,25 +69,54 @@ def fetch_options(map_id, ssi, page):
                 if txt and txt != "없음":
                     options.append(txt)
 
-    return list(dict.fromkeys(options))  # 중복 제거 유지
+    return list(dict.fromkeys(options))  # 중복 제거
+
+
+def fetch_total_pages():
+    """첫 페이지에서 총 검색 건수 가져오기"""
+    params = {
+        "svrID": "129",
+        "itemFullName": "의상",
+        "itemOrder": "",
+        "inclusion": "",
+        "curpage": 1,
+    }
+    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
+    r.encoding = "utf-8"
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    total_items = 0
+    info = soup.find(string=lambda x: x and "검색결과" in x)
+    if info:
+        try:
+            total_items = int("".join([c for c in info if c.isdigit()]))
+        except Exception as e:
+            print("[error] total_items parse 실패:", e)
+
+    if total_items == 0:
+        print("[warn] 검색결과 없음. 기본 1페이지 처리")
+        return 1
+
+    total_pages = math.ceil(total_items / 10)
+    print(f"[info] total_items={total_items}, total_pages={total_pages}")
+    return total_pages
 
 
 def fetch_page(cur, page):
-    """목록 페이지에서 아이템 추출"""
     params = {
-        "svrID": SERVER_ID,
-        "itemFullName": SEARCH_KEYWORD,
+        "svrID": "129",
+        "itemFullName": "의상",
         "itemOrder": "",
         "inclusion": "",
         "curpage": page,
     }
-    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=20)
+    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
     r.encoding = "utf-8"
     soup = BeautifulSoup(r.text, "html.parser")
 
     rows = soup.select("table.dealList tbody tr")
     if not rows:
-        print(f"[page={page}] no rows -> 종료")
+        print(f"[page={page}] no items -> 종료")
         return False
 
     for row in rows:
@@ -143,16 +139,17 @@ def fetch_page(cur, page):
                     parts = onclick.split("(")[1].split(")")[0].split(",")
                     map_id, ssi = parts[1].strip(), parts[2].strip().strip("'")
                     opt_list = fetch_options(map_id, ssi, page)
-                    options = " | ".join(opt_list) if opt_list else "-"
+                    if opt_list:
+                        options = " | ".join(opt_list)
                 except Exception as e:
                     print(f"[warn] 옵션 파싱 실패: {e}")
-
-        print(f"[item] {name} | {price} | {shop} | {options}")
 
         cur.execute("""
             INSERT INTO items (name, server, quantity, price, shop, options, last_updated)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (name, server, quantity, price, shop, options, time.strftime("%Y-%m-%d %H:%M:%S")))
+
+        print(f"[item] {name} | {price} | {shop} | {options}")
 
     print(f"[page={page}] {len(rows)} items processed")
     return True
@@ -164,10 +161,9 @@ def main():
     cur = conn.cursor()
 
     total_pages = fetch_total_pages()
+
     for page in range(1, total_pages + 1):
-        ok = fetch_page(cur, page)
-        if not ok:
-            break
+        fetch_page(cur, page)
 
     conn.commit()
     conn.close()
