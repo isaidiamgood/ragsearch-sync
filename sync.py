@@ -1,4 +1,4 @@
-import sqlite3, os, time, math, requests
+import sqlite3, os, time, requests, re
 from bs4 import BeautifulSoup
 
 LIST_URL = "https://ro.gnjoy.com/itemdeal/itemDealList.asp"
@@ -10,6 +10,7 @@ LAST_SYNC_FILE = "last_sync.txt"
 
 
 def init_db():
+    # 매번 새 DB로 초기화
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
     conn = sqlite3.connect(DB_FILE)
@@ -69,42 +70,32 @@ def fetch_options(map_id, ssi, page):
                 if txt and txt != "없음":
                     options.append(txt)
 
-    return list(dict.fromkeys(options))  # 중복 제거
+    # 중복 제거
+    options = list(dict.fromkeys(options))
+    return options if options else ["-"]
 
 
-def fetch_total_pages():
-    """첫 페이지에서 총 검색 건수 가져오기"""
-    params = {
-        "svrID": "129",
-        "itemFullName": "의상",
-        "itemOrder": "",
-        "inclusion": "",
-        "curpage": 1,
-    }
-    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
-    r.encoding = "utf-8"
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    total_items = 0
-    info = soup.find(string=lambda x: x and "검색결과" in x)
-    if info:
-        try:
-            total_items = int("".join([c for c in info if c.isdigit()]))
-        except Exception as e:
-            print("[error] total_items parse 실패:", e)
-
-    if total_items == 0:
-        print("[warn] 검색결과 없음. 기본 1페이지 처리")
+def get_total_pages(soup):
+    try:
+        summary_text = soup.get_text()
+        # "검색결과 : 1,894건" → 1894 추출
+        m = re.search(r"검색결과\s*:\s*([\d,]+)건", summary_text)
+        if m:
+            total_items = int(m.group(1).replace(",", ""))
+            total_pages = (total_items // 10) + (1 if total_items % 10 else 0)
+            print(f"[info] total_items={total_items}, total_pages={total_pages}")
+            return total_pages
+        else:
+            print("[warn] 검색결과 영역 탐색 실패")
+            return 1
+    except Exception as e:
+        print(f"[error] total_items parse 실패: {e}")
         return 1
-
-    total_pages = math.ceil(total_items / 10)
-    print(f"[info] total_items={total_items}, total_pages={total_pages}")
-    return total_pages
 
 
 def fetch_page(cur, page):
     params = {
-        "svrID": "129",
+        "svrID": "129",  # 바포메트 서버 고정
         "itemFullName": "의상",
         "itemOrder": "",
         "inclusion": "",
@@ -116,7 +107,7 @@ def fetch_page(cur, page):
 
     rows = soup.select("table.dealList tbody tr")
     if not rows:
-        print(f"[page={page}] no items -> 종료")
+        print(f"[page={page}] no more items -> 종료")
         return False
 
     for row in rows:
@@ -131,25 +122,26 @@ def fetch_page(cur, page):
         price = cols[3].get_text(strip=True)
         shop = cols[4].get_text(strip=True)
 
-        options = "-"
+        options = ["-"]
         if item_tag:
             onclick = item_tag.get("onclick", "")
             if "CallItemDealView" in onclick:
                 try:
                     parts = onclick.split("(")[1].split(")")[0].split(",")
                     map_id, ssi = parts[1].strip(), parts[2].strip().strip("'")
-                    opt_list = fetch_options(map_id, ssi, page)
-                    if opt_list:
-                        options = " | ".join(opt_list)
+                    options = fetch_options(map_id, ssi, page)
                 except Exception as e:
                     print(f"[warn] 옵션 파싱 실패: {e}")
+
+        options_str = " | ".join(options)
+
+        print(f"[item] {name} | {price} | {shop} | {options_str}")
 
         cur.execute("""
             INSERT INTO items (name, server, quantity, price, shop, options, last_updated)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (name, server, quantity, price, shop, options, time.strftime("%Y-%m-%d %H:%M:%S")))
-
-        print(f"[item] {name} | {price} | {shop} | {options}")
+        """, (name, server, quantity, price, shop, options_str,
+              time.strftime("%Y-%m-%d %H:%M:%S")))
 
     print(f"[page={page}] {len(rows)} items processed")
     return True
@@ -160,10 +152,23 @@ def main():
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
 
-    total_pages = fetch_total_pages()
+    # 첫 페이지로 total_pages 구하기
+    params = {
+        "svrID": "129",
+        "itemFullName": "의상",
+        "itemOrder": "",
+        "inclusion": "",
+        "curpage": 1,
+    }
+    r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=15)
+    r.encoding = "utf-8"
+    soup = BeautifulSoup(r.text, "html.parser")
+    total_pages = get_total_pages(soup)
 
     for page in range(1, total_pages + 1):
-        fetch_page(cur, page)
+        ok = fetch_page(cur, page)
+        if not ok:
+            break
 
     conn.commit()
     conn.close()
