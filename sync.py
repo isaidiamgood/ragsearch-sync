@@ -49,7 +49,7 @@ def fetch_all():
     page = 1
 
     while True:
-        url = f"{BASE_URL}?itemName={SEARCH_KEYWORD}&curpage={page}"
+        url = f"{BASE_URL}?itemFullName={SEARCH_KEYWORD}&curpage={page}"
         r = requests.get(url, timeout=15)
         soup = BeautifulSoup(r.text, "lxml")
         items = soup.select(".item_list tbody tr")
@@ -109,3 +109,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
