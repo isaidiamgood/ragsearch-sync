@@ -8,6 +8,8 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 DB_FILE = "items.db"
 LAST_SYNC_FILE = "last_sync.txt"
 
+total_saved = 0
+
 
 def init_db():
     if os.path.exists(DB_FILE):
@@ -36,7 +38,6 @@ def update_last_sync_time():
 
 
 def fetch_options(map_id, ssi, page):
-    """상세 페이지에서 슬롯/랜덤옵션/추가 텍스트까지 전부 긁어오기"""
     url = f"{VIEW_URL}?svrID=129&mapID={map_id}&ssi={ssi}&curpage={page}"
     print(f"[debug] 상세페이지 요청: {url}")
     r = requests.get(url, headers=HEADERS, timeout=15)
@@ -45,24 +46,21 @@ def fetch_options(map_id, ssi, page):
 
     options = []
 
-    # 옵션 테이블 전체 탐색
+    # 슬롯/랜덤옵션
     for th in soup.find_all("th"):
         if any(key in th.get_text() for key in ["슬롯정보", "랜덤옵션"]):
             td = th.find_next("td")
             if td:
-                # 이미지 alt
                 for img in td.find_all("img"):
                     alt = img.get("alt", "").strip()
                     if alt and alt != "없음":
                         options.append(alt)
-                # 텍스트
                 for txt in td.stripped_strings:
                     if txt and txt != "없음" and not txt.endswith(": 0"):
                         options.append(txt)
 
-    # 혹시 남아있는 다른 옵션 td들도 긁기
-    etc_tds = soup.select("table tr td")
-    for td in etc_tds:
+    # 안전망: 테이블 td 전부 탐색 (DEX+3 같은 일반 옵션 포함)
+    for td in soup.select("table tr td"):
         for txt in td.stripped_strings:
             if txt and txt != "없음" and not txt.endswith(": 0"):
                 options.append(txt)
@@ -72,13 +70,16 @@ def fetch_options(map_id, ssi, page):
 
     if not options:
         print(f"[warn] 옵션 없음 -> url={url}")
+        # HTML 일부도 찍기 (앞부분만)
+        print("[debug] 옵션 HTML 미리보기:", r.text[:300])
 
     return options
 
 
-def fetch_page(cur, page, total_saved):
+def fetch_page(cur, page):
+    global total_saved
     params = {
-        "svrID": "129",
+        "svrID": "129",   # 바포메트 서버 고정
         "itemFullName": "의상",
         "itemOrder": "",
         "inclusion": "",
@@ -91,7 +92,7 @@ def fetch_page(cur, page, total_saved):
     rows = soup.select("table.dealList tbody tr")
     if not rows:
         print(f"[page={page}] no more items -> 종료")
-        return False, total_saved
+        return False
 
     count = 0
     for row in rows:
@@ -129,13 +130,10 @@ def fetch_page(cur, page, total_saved):
         count += 1
 
     print(f"[page={page}] {count} items processed (누적 {total_saved}개)")
-
-    # 마지막 페이지 감지
     if count < 10:
         print(f"[page={page}] 마지막 페이지 감지 (10개 미만) -> 종료")
-        return False, total_saved
-
-    return True, total_saved
+        return False
+    return True
 
 
 def main():
@@ -144,9 +142,8 @@ def main():
     cur = conn.cursor()
 
     page = 1
-    total_saved = 0
     while True:
-        ok, total_saved = fetch_page(cur, page, total_saved)
+        ok = fetch_page(cur, page)
         if not ok:
             break
         page += 1
