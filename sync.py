@@ -35,8 +35,8 @@ def update_last_sync_time():
         f.write(time.strftime("%Y-%m-%d %H:%M:%S"))
 
 
-def fetch_options(map_id, ssi):
-    url = f"{VIEW_URL}?svrID=129&mapID={map_id}&ssi={ssi}"
+def fetch_options(map_id, ssi, page):
+    url = f"{VIEW_URL}?svrID=129&mapID={map_id}&ssi={ssi}&curpage={page}"
     print(f"[debug] 상세페이지 요청: {url}")
     r = requests.get(url, headers=HEADERS, timeout=15)
     r.encoding = "utf-8"
@@ -71,15 +71,16 @@ def fetch_options(map_id, ssi):
                     options.append(txt)
 
     options = list(dict.fromkeys(options))
+
     if not options:
         print(f"[warn] 옵션 없음 -> url={url}")
 
     return options
 
 
-def fetch_page(cur, page, conn):
+def fetch_page(cur, page, conn, total_count):
     params = {
-        "svrID": "129",   # 바포메트 서버
+        "svrID": "129",   # 바포메트 서버 고정
         "itemFullName": "의상",
         "itemOrder": "",
         "inclusion": "",
@@ -92,7 +93,7 @@ def fetch_page(cur, page, conn):
     rows = soup.select("table.dealList tbody tr")
     if not rows:
         print(f"[page={page}] no more items -> 종료")
-        return False
+        return False, total_count
 
     for row in rows:
         cols = row.find_all("td")
@@ -114,23 +115,29 @@ def fetch_page(cur, page, conn):
                     parts = onclick.split("(")[1].split(")")[0].split(",")
                     map_id, ssi = parts[1].strip(), parts[2].strip().strip("'")
                     print(f"[debug] onclick 파싱 성공: map_id={map_id}, ssi={ssi}")
-                    options = fetch_options(map_id, ssi)
+                    options = fetch_options(map_id, ssi, page)
                 except Exception as e:
                     print(f"[warn] 옵션 파싱 실패: {e}")
 
         options_str = " | ".join(options) if options else "-"
         
-        # DB 저장 + 로그
+        # DB 저장
         cur.execute("""
             INSERT INTO items (name, server, quantity, price, shop, options, last_updated)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (name, server, quantity, price, shop, options_str, time.strftime("%Y-%m-%d %H:%M:%S")))
         
+        total_count += 1
         conn.commit()
-        print(f"[save] {name} 저장 완료 (옵션: {options_str})")
+        print(f"[save] {name} | {price} | {shop} | {options_str} (누적 {total_count}개 저장)")
 
-    print(f"[page={page}] {len(rows)} items processed (누적 저장됨)")
-    return True
+    print(f"[page={page}] {len(rows)} items processed")
+    # 마지막 페이지가 10개 미만일 경우 → 여기서 종료
+    if len(rows) < 10:
+        print(f"[page={page}] 마지막 페이지 감지 (총 {total_count}개 저장 완료) -> 종료")
+        return False, total_count
+
+    return True, total_count
 
 
 def main():
@@ -139,15 +146,16 @@ def main():
     cur = conn.cursor()
 
     page = 1
+    total_count = 0
     while True:
-        ok = fetch_page(cur, page, conn)
+        ok, total_count = fetch_page(cur, page, conn, total_count)
         if not ok:
             break
         page += 1
 
     conn.close()
     update_last_sync_time()
-    print("[done] items.db 최종 생성 완료")
+    print(f"[done] items.db 최종 생성 완료 (총 {total_count}개 아이템 저장됨)")
 
 
 if __name__ == "__main__":
