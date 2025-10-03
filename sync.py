@@ -78,7 +78,7 @@ def fetch_options(map_id, ssi, page):
     return options
 
 
-def fetch_page(cur, page, conn, total_count):
+def fetch_page(cur, page, total_saved):
     params = {
         "svrID": "129",   # 바포메트 서버 고정
         "itemFullName": "의상",
@@ -93,8 +93,9 @@ def fetch_page(cur, page, conn, total_count):
     rows = soup.select("table.dealList tbody tr")
     if not rows:
         print(f"[page={page}] no more items -> 종료")
-        return False, total_count
+        return False, total_saved
 
+    count = 0
     for row in rows:
         cols = row.find_all("td")
         if len(cols) < 5:
@@ -120,24 +121,23 @@ def fetch_page(cur, page, conn, total_count):
                     print(f"[warn] 옵션 파싱 실패: {e}")
 
         options_str = " | ".join(options) if options else "-"
-        
-        # DB 저장
+        total_saved += 1
+        print(f"[save] {name} | {price} | {shop} | {options_str} (누적 {total_saved}개 저장)")
+
         cur.execute("""
             INSERT INTO items (name, server, quantity, price, shop, options, last_updated)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (name, server, quantity, price, shop, options_str, time.strftime("%Y-%m-%d %H:%M:%S")))
-        
-        total_count += 1
-        conn.commit()
-        print(f"[save] {name} | {price} | {shop} | {options_str} (누적 {total_count}개 저장)")
+        count += 1
 
-    print(f"[page={page}] {len(rows)} items processed")
-    # 마지막 페이지가 10개 미만일 경우 → 여기서 종료
-    if len(rows) < 10:
-        print(f"[page={page}] 마지막 페이지 감지 (총 {total_count}개 저장 완료) -> 종료")
-        return False, total_count
+    print(f"[page={page}] {count} items processed (누적 {total_saved}개)")
 
-    return True, total_count
+    # ✅ 마지막 페이지 감지
+    if count < 10:
+        print(f"[page={page}] 마지막 페이지 감지 (10개 미만) -> 종료")
+        return False, total_saved
+
+    return True, total_saved
 
 
 def main():
@@ -146,16 +146,17 @@ def main():
     cur = conn.cursor()
 
     page = 1
-    total_count = 0
+    total_saved = 0
     while True:
-        ok, total_count = fetch_page(cur, page, conn, total_count)
+        ok, total_saved = fetch_page(cur, page, total_saved)
         if not ok:
             break
         page += 1
 
+    conn.commit()
     conn.close()
     update_last_sync_time()
-    print(f"[done] items.db 최종 생성 완료 (총 {total_count}개 아이템 저장됨)")
+    print(f"[done] items.db 새로 생성 완료. 총 {total_saved}개 아이템 저장됨")
 
 
 if __name__ == "__main__":
