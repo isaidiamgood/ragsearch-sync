@@ -36,6 +36,7 @@ def update_last_sync_time():
 
 
 def fetch_options(map_id, ssi, page):
+    """상세 페이지에서 슬롯/랜덤옵션/추가 텍스트까지 전부 긁어오기"""
     url = f"{VIEW_URL}?svrID=129&mapID={map_id}&ssi={ssi}&curpage={page}"
     print(f"[debug] 상세페이지 요청: {url}")
     r = requests.get(url, headers=HEADERS, timeout=15)
@@ -44,32 +45,29 @@ def fetch_options(map_id, ssi, page):
 
     options = []
 
-    # 슬롯정보
-    slot_th = soup.find("th", string=lambda x: x and "슬롯정보" in x)
-    if slot_th:
-        td = slot_th.find_next("td")
-        if td:
-            for img in td.find_all("img"):
-                alt = img.get("alt", "").strip()
-                if alt and alt != "없음":
-                    options.append(alt)
-            for txt in td.stripped_strings:
-                if txt and txt != "없음" and not txt.endswith(": 0"):
-                    options.append(txt)
+    # 옵션 테이블 전체 탐색
+    for th in soup.find_all("th"):
+        if any(key in th.get_text() for key in ["슬롯정보", "랜덤옵션"]):
+            td = th.find_next("td")
+            if td:
+                # 이미지 alt
+                for img in td.find_all("img"):
+                    alt = img.get("alt", "").strip()
+                    if alt and alt != "없음":
+                        options.append(alt)
+                # 텍스트
+                for txt in td.stripped_strings:
+                    if txt and txt != "없음" and not txt.endswith(": 0"):
+                        options.append(txt)
 
-    # 랜덤옵션
-    rand_th = soup.find("th", string=lambda x: x and "랜덤옵션" in x)
-    if rand_th:
-        td = rand_th.find_next("td")
-        if td:
-            for img in td.find_all("img"):
-                alt = img.get("alt", "").strip()
-                if alt and alt != "없음":
-                    options.append(alt)
-            for txt in td.stripped_strings:
-                if txt and txt != "없음":
-                    options.append(txt)
+    # 혹시 남아있는 다른 옵션 td들도 긁기
+    etc_tds = soup.select("table tr td")
+    for td in etc_tds:
+        for txt in td.stripped_strings:
+            if txt and txt != "없음" and not txt.endswith(": 0"):
+                options.append(txt)
 
+    # 중복 제거
     options = list(dict.fromkeys(options))
 
     if not options:
@@ -80,7 +78,7 @@ def fetch_options(map_id, ssi, page):
 
 def fetch_page(cur, page, total_saved):
     params = {
-        "svrID": "129",   # 바포메트 서버 고정
+        "svrID": "129",
         "itemFullName": "의상",
         "itemOrder": "",
         "inclusion": "",
@@ -132,7 +130,7 @@ def fetch_page(cur, page, total_saved):
 
     print(f"[page={page}] {count} items processed (누적 {total_saved}개)")
 
-    # ✅ 마지막 페이지 감지
+    # 마지막 페이지 감지
     if count < 10:
         print(f"[page={page}] 마지막 페이지 감지 (10개 미만) -> 종료")
         return False, total_saved
